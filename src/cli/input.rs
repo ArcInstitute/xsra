@@ -36,7 +36,7 @@ impl MultiInputOptions {
 pub struct AccessionOptions {
     /// Only download an SRA with complete quality scores
     ///
-    /// Default: lite
+    /// Default: lite, but will fallback to full quality if unavailable
     #[clap(short = 'Q', long)]
     pub full_quality: bool,
 
