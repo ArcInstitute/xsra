@@ -111,9 +111,9 @@ fn parse_memory_size(input: &str) -> Result<usize, String> {
     let last_char = input.chars().last().unwrap_or('0');
 
     let (number_str, multiplier) = match last_char {
-        'K' | 'k' => (&input[..input.len() - 1], 1024),
-        'M' | 'm' => (&input[..input.len() - 1], 1024 * 1024),
-        'G' | 'g' => (&input[..input.len() - 1], 1024 * 1024 * 1024),
+        'K' => (&input[..input.len() - 1], 1024),
+        'M' => (&input[..input.len() - 1], 1024 * 1024),
+        'G' => (&input[..input.len() - 1], 1024 * 1024 * 1024),
         _ if last_char.is_ascii_digit() => (input.as_str(), 1),
         _ => return Err(format!("Invalid memory size format: {input}")),
     };
@@ -121,5 +121,41 @@ fn parse_memory_size(input: &str) -> Result<usize, String> {
     match number_str.parse::<usize>() {
         Ok(number) => Ok(number * multiplier),
         Err(_) => Err(format!("Failed to parse number: {number_str}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // parse_memory_size tests
+    #[test]
+    fn parse_memory_size_k_suffix() {
+        assert_eq!(parse_memory_size("1K"), Ok(1024));
+    }
+
+    #[test]
+    fn parse_memory_size_m_suffix() {
+        assert_eq!(parse_memory_size("1M"), Ok(1024 * 1024));
+    }
+
+    #[test]
+    fn parse_memory_size_g_suffix() {
+        assert_eq!(parse_memory_size("1G"), Ok(1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn parse_memory_size_ascii_digit() {
+        assert_eq!(parse_memory_size("1024"), Ok(1024));
+    }
+
+    #[test]
+    fn parse_memory_size_invalid_format() {
+        assert!(parse_memory_size("512X").is_err());
+    }
+
+    #[test]
+    fn parse_memory_size_invalid_number() {
+        assert!(parse_memory_size("abcK").is_err());
     }
 }

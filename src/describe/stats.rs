@@ -4,7 +4,7 @@ use anyhow::Result;
 use ncbi_vdb_sys::SegmentType;
 use serde::{Serialize, Serializer};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct SegmentTypeWrapper(SegmentType);
 impl std::fmt::Display for SegmentTypeWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -29,7 +29,7 @@ impl From<SegmentType> for SegmentTypeWrapper {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct SegmentStats {
     sid: usize,
     segment_type: SegmentTypeWrapper,
@@ -104,5 +104,53 @@ impl DescribeStats {
     pub fn pprint<W: Write>(&self, wtr: &mut W) -> Result<()> {
         serde_json::to_writer_pretty(wtr, self)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // DescribeStats::new tests
+    #[test]
+    fn test_describe_stats_creation() {
+        let segment_types = vec![SegmentType::Biological, SegmentType::Technical];
+        let segment_lengths = vec![vec![100.0, 150.0], vec![20.0, 30.0]]; // means: 125.0, 25.0
+        let segment_qualities = vec![vec![30.0, 34.0], vec![25.0, 25.0]]; // means: 32.0, 25.0
+        let processed_spots = 10;
+        let first_spot = 1;
+        let last_spot = 11;
+        let total_spots = 100;
+
+        let stats = DescribeStats::new(
+            segment_types,
+            segment_lengths,
+            segment_qualities,
+            processed_spots,
+            first_spot,
+            last_spot,
+            total_spots,
+        );
+
+        let expected_stats = vec![
+            SegmentStats {
+                sid: 0,
+                segment_type: SegmentType::Biological.into(),
+                mean_length: 125.0,
+                mean_quality: 32.0,
+            },
+            SegmentStats {
+                sid: 1,
+                segment_type: SegmentType::Technical.into(),
+                mean_length: 25.0,
+                mean_quality: 25.0,
+            },
+        ];
+
+        // Assert that the generated stats vector matches the expected vector
+        assert_eq!(
+            stats.stats, expected_stats,
+            "The generated SegmentStats vector should match the expected calculations"
+        );
     }
 }

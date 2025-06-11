@@ -85,3 +85,25 @@ pub fn describe(input: &InputOptions, opts: &DescribeOptions) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    // describe_inner tests
+    #[test]
+    fn describe_inner_handles_invalid_sra_file() {
+        // Create an empty temporary file.
+        // This is not a valid SRA file.
+        let temp_sra = NamedTempFile::new().unwrap();
+        let path = temp_sra.path().to_str().unwrap();
+
+        let result = describe_inner(path, 0, 10);
+
+        assert!(
+            result.is_err(),
+            "describe_inner should fail when given a non-SRA file"
+        );
+    }
+}

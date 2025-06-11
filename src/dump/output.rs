@@ -307,3 +307,62 @@ impl SegmentWriter for DirectWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    // Simple in-memory writer that lets us inspect written data
+    struct TestWriter {
+        data: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut guard = self.data.lock().unwrap();
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // DirectWriter::write_all_buffers tests
+    #[test]
+    fn direct_writer_write_all_buffers_happy_path_with_empty_segment() {
+        // Shared data holders so we can inspect after the call
+        let data1 = Arc::new(Mutex::new(Vec::new()));
+        let data2 = Arc::new(Mutex::new(Vec::new()));
+
+        let writer1: Box<dyn Write + Send> = Box::new(TestWriter {
+            data: data1.clone(),
+        });
+        let writer2: Box<dyn Write + Send> = Box::new(TestWriter {
+            data: data2.clone(),
+        });
+
+        let mut dw = DirectWriter {
+            segment_handles: vec![writer1, writer2],
+        };
+
+        // Prepare buffers: first segment has data, second is empty
+        let mut buffers = vec![b"ACGT".to_vec(), Vec::new()];
+        let mut counts = vec![1, 0];
+
+        dw.write_all_buffers(&mut buffers, &mut counts).unwrap();
+
+        // After writing, buffers should be drained and counts reset
+        assert!(buffers[0].is_empty());
+        assert!(buffers[1].is_empty());
+        assert_eq!(counts, vec![0, 0]);
+
+        // Verify data written to the correct writer
+        let written1 = data1.lock().unwrap().clone();
+        let written2 = data2.lock().unwrap().clone();
+        assert_eq!(written1, b"ACGT");
+        assert!(written2.is_empty());
+    }
+}

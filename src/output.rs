@@ -239,3 +239,196 @@ pub fn build_writers(
         Ok(writers)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use tempfile::TempDir;
+
+    // create_fifo_if_absent tests
+    #[test]
+    fn create_fifo_if_absent_fails_with_non_fifo_output() {
+        let result = create_fifo_if_absent(OutputFileType::RegularFile("test"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("`create_fifo_if_absent` should not be called for a non-fifo output!"));
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn create_fifo_if_absent_existing_fifo_file() {
+        use std::process::Command;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test_fifo");
+
+        // Create an actual fifo using mkfifo
+        let status = Command::new("mkfifo")
+            .arg(&file_path)
+            .status()
+            .expect("mkfifo should be available on unix");
+
+        if status.success() {
+            let result =
+                create_fifo_if_absent(OutputFileType::NamedPipe(file_path.to_str().unwrap()));
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn create_fifo_if_absent_existing_non_fifo_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test_file");
+
+        // Create a regular file (not a fifo)
+        File::create(&file_path).unwrap();
+
+        let result = create_fifo_if_absent(OutputFileType::NamedPipe(file_path.to_str().unwrap()));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("existed already, but wasn't a fifo"));
+    }
+
+    #[test]
+    #[cfg(not(target_family = "unix"))]
+    fn create_fifo_if_absent_existing_file_non_unix() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test_file");
+
+        // Create a regular file
+        File::create(&file_path).unwrap();
+
+        let result = create_fifo_if_absent(OutputFileType::NamedPipe(file_path.to_str().unwrap()));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Named pipes are not supported on non-unix")); // cfg!(target_family = "unix") false
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn create_fifo_if_absent_creates_new_fifo_unix() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("new_fifo");
+
+        // File doesn't exist, should try to create fifo
+        let result = create_fifo_if_absent(OutputFileType::NamedPipe(file_path.to_str().unwrap()));
+
+        if result.is_err() {
+            assert!(result.unwrap_err().to_string().contains("mkfifo"));
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_family = "unix"))]
+    fn create_fifo_if_absent_creates_new_fifo_non_unix() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("new_fifo");
+
+        // File doesn't exist, should fail on non-unix
+        let result = create_fifo_if_absent(OutputFileType::NamedPipe(file_path.to_str().unwrap()));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Named pipes are not supported on non-unix"));
+    }
+
+    // build_writers tests
+    #[test]
+    fn build_writers_creates_directory_and_writers_for_included_segments() {
+        use crate::cli::{FilterOptions, OutputFormat};
+
+        let temp_dir = TempDir::new().unwrap();
+        let new_dir = temp_dir.path().join("new_output_dir");
+
+        // Test with specific segments included
+        let filter_opts = FilterOptions {
+            min_read_len: 1,
+            skip_technical: false,
+            limit: None,
+            include: vec![0, 2],
+        };
+
+        let result = build_writers(
+            Some(new_dir.to_str().unwrap()),
+            "test",
+            Compression::Uncompressed,
+            OutputFormat::Fasta,
+            4,
+            &filter_opts,
+            false,
+        );
+
+        assert!(result.is_ok());
+        // Test new path
+        assert!(new_dir.exists());
+        // Tests filter options
+        let writers = result.unwrap();
+        assert_eq!(writers.len(), 4); // Should still have 4 writers (2 real, 2 empty)
+    }
+
+    #[test]
+    fn build_writers_uses_empty_writer_for_filtered_segments() {
+        use crate::cli::{FilterOptions, OutputFormat};
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Test with only segment 0 included, others should use empty writers
+        let filter_opts = FilterOptions {
+            min_read_len: 1,
+            skip_technical: false,
+            limit: None,
+            include: vec![0],
+        };
+
+        let result = build_writers(
+            Some(temp_dir.path().to_str().unwrap()),
+            "test",
+            Compression::Uncompressed,
+            OutputFormat::Fasta,
+            4,
+            &filter_opts,
+            false,
+        );
+
+        assert!(result.is_ok());
+        let writers = result.unwrap();
+        // Tests empty writers
+        assert_eq!(writers.len(), 4);
+    }
+
+    #[test]
+    fn build_writers_stdout_when_no_outdir() {
+        use crate::cli::{FilterOptions, OutputFormat};
+
+        let filter_opts = FilterOptions {
+            min_read_len: 1,
+            skip_technical: false,
+            limit: None,
+            include: vec![],
+        };
+
+        // Tests stdout writer
+        let result = build_writers(
+            None,
+            "test",
+            Compression::Uncompressed,
+            OutputFormat::Fasta,
+            4,
+            &filter_opts,
+            false,
+        );
+
+        assert!(result.is_ok());
+        let writers = result.unwrap();
+        assert_eq!(writers.len(), 1);
+    }
+}
