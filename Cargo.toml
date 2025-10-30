@@ -1,6 +1,6 @@
 [package]
 name = "xsra"
-version = "0.2.25"
+version = "0.2.26"
 edition = "2021"
 license = "MIT"
 authors = ["Noam Teyssier <noam.teyssier@arcinstitute.org>"]
@@ -11,34 +11,34 @@ keywords = ["ncbi", "binseq", "SRA", "genomics", "fasterq-dump"]
 
 
 [dependencies]
-anyhow = "1.0.95"
-binseq = "0.6.2"
-clap = { version = "4.5.28", features = ["derive"] }
+anyhow = "1.0.100"
+binseq = "0.7.5"
+clap = { version = "4.5.51", features = ["derive"] }
 futures = "0.3.31"
-gzp = "1"
-hashbrown = "0.15.2"
-indicatif = "0.17.11"
-libc = "0.2.172"
-ncbi-vdb-sys = "0.1.5"
-num_cpus = "1.16.0"
-parking_lot = "0.12.3"
-reqwest = { version = "0.12.15", default-features = false, features = [
+gzp = "2"
+hashbrown = "0.16.0"
+indicatif = "0.18.2"
+libc = "0.2.177"
+ncbi-vdb-sys = "0.1.6"
+num_cpus = "1.17.0"
+parking_lot = "0.12.5"
+reqwest = { version = "0.12.24", default-features = false, features = [
     "blocking",
     "stream",
     "rustls-tls",
 ] }
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.138"
-tokio = { version = "1.44.1", features = ["rt", "rt-multi-thread"] }
-zstd = { version = "0.13.2", features = ["zstdmt"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["rt", "rt-multi-thread"] }
+zstd = { version = "0.13.3", features = ["zstdmt"] }
 
 [dev-dependencies]
-assert_cmd = "2.0.17"
+assert_cmd = "2.1.1"
 predicates = "3.1.3"
 mockito = "1.7.0"
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 tokio-test = "0.4.4"
 
 [dev-dependencies.tokio]
-version = "1.45.1"
+version = "1.48.0"
 features = ["rt", "rt-multi-thread", "macros", "test-util"]

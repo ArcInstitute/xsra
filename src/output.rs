@@ -141,13 +141,13 @@ fn compression_passthrough<W: Write + Send + 'static>(
     match compression {
         Compression::Uncompressed => Ok(Box::new(writer)),
         Compression::Gzip => {
-            let pt: ParCompress<Gzip> = ParCompressBuilder::default()
+            let pt: ParCompress<Gzip, _> = ParCompressBuilder::default()
                 .num_threads(num_threads)?
                 .from_writer(writer);
             Ok(Box::new(pt))
         }
         Compression::Bgzip => {
-            let pt: ParCompress<Bgzf> = ParCompressBuilder::default()
+            let pt: ParCompress<Bgzf, _> = ParCompressBuilder::default()
                 .num_threads(num_threads)?
                 .from_writer(writer);
             Ok(Box::new(pt))
