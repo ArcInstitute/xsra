@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use binseq::{
-    bq::{BinseqHeader, BinseqWriterBuilder},
-    vbq::{VBinseqHeader, VBinseqWriterBuilder},
-    Policy,
+    bq::{BinseqHeaderBuilder, BinseqWriterBuilder},
+    vbq::{VBinseqHeaderBuilder, VBinseqWriterBuilder},
+    BitSize, Policy,
 };
 use ncbi_vdb_sys::SraReader;
 use parking_lot::Mutex;
@@ -40,6 +40,7 @@ pub fn recode(args: &RecodeArgs) -> Result<()> {
             &args.output.name(),
             args.primary_sid(),
             args.extended_sid(),
+            args.output.bitsize(),
             args.runtime.threads(),
         ),
         BinseqFlavor::VBinseq => recode_to_vbinseq(
@@ -47,6 +48,7 @@ pub fn recode(args: &RecodeArgs) -> Result<()> {
             &args.output.name(),
             args.primary_sid(),
             args.extended_sid(),
+            args.output.bitsize(),
             args.output.block_size,
             args.runtime.threads(),
         ),
@@ -58,6 +60,7 @@ fn recode_to_binseq(
     output_path: &str,
     primary_sid: usize,
     extended_sid: Option<usize>,
+    bitsize: BitSize,
     num_threads: u64,
 ) -> Result<()> {
     let stats = describe_inner(accession, 0, 100)?;
@@ -80,11 +83,12 @@ fn recode_to_binseq(
     };
 
     let output = File::create(output_path).map(BufWriter::new)?;
-    let header = if xlen > 0 {
-        BinseqHeader::new_extended(slen, xlen)
-    } else {
-        BinseqHeader::new(slen)
-    };
+    let header = BinseqHeaderBuilder::new()
+        .slen(slen)
+        .xlen(xlen)
+        .bitsize(bitsize)
+        .flags(false)
+        .build()?;
     let policy = Policy::RandomDraw;
     let g_writer = BinseqWriterBuilder::default()
         .header(header)
@@ -120,10 +124,10 @@ fn recode_to_binseq(
                 if xlen > 0 {
                     let primary_seg = record.get_segment(primary_sid).unwrap();
                     let extended_seg = record.get_segment(extended_sid.unwrap()).unwrap();
-                    t_writer.write_paired(0, primary_seg.seq(), extended_seg.seq())?;
+                    t_writer.write_paired_record(None, primary_seg.seq(), extended_seg.seq())?;
                 } else {
                     let primary_seg = record.get_segment(primary_sid).unwrap();
-                    t_writer.write_nucleotides(0, primary_seg.seq())?;
+                    t_writer.write_record(None, primary_seg.seq())?;
                 }
 
                 // Process records at a constant interval
@@ -161,15 +165,21 @@ fn recode_to_vbinseq(
     output_path: &str,
     primary_sid: usize,
     extended_sid: Option<usize>,
+    bitsize: BitSize,
     block_size: usize,
     num_threads: u64,
 ) -> Result<()> {
     let output = File::create(output_path).map(BufWriter::new)?;
-    let header = if extended_sid.is_some() {
-        VBinseqHeader::with_capacity(block_size as u64, true, true, true)
-    } else {
-        VBinseqHeader::with_capacity(block_size as u64, true, true, false)
-    };
+    let header = VBinseqHeaderBuilder::new()
+        .block(block_size as u64)
+        .flags(false)
+        .qual(true)
+        .headers(false)
+        .bitsize(bitsize)
+        .compressed(true)
+        .paired(extended_sid.is_some())
+        .build();
+
     let policy = Policy::RandomDraw;
     let g_writer = VBinseqWriterBuilder::default()
         .header(header)
@@ -205,16 +215,23 @@ fn recode_to_vbinseq(
                 if let Some(extended_sid) = extended_sid {
                     let primary_seg = record.get_segment(primary_sid).unwrap();
                     let extended_seg = record.get_segment(extended_sid).unwrap();
-                    t_writer.write_nucleotides_quality_paired(
-                        0,
+                    t_writer.write_paired_record(
+                        None,
+                        None,
                         primary_seg.seq(),
+                        Some(primary_seg.qual()),
+                        None,
                         extended_seg.seq(),
-                        primary_seg.qual(),
-                        extended_seg.qual(),
+                        Some(extended_seg.qual()),
                     )?;
                 } else {
                     let primary_seg = record.get_segment(primary_sid).unwrap();
-                    t_writer.write_nucleotides_quality(0, primary_seg.seq(), primary_seg.qual())?;
+                    t_writer.write_record(
+                        None,
+                        None,
+                        primary_seg.seq(),
+                        Some(primary_seg.qual()),
+                    )?;
                 }
 
                 // Process records at a constant interval

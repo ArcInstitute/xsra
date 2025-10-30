@@ -1,5 +1,6 @@
 use super::{InputOptions, RuntimeOptions};
 use anyhow::{bail, Result};
+use binseq::BitSize;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -73,6 +74,10 @@ pub struct RecodeOutput {
     #[clap(short, long)]
     pub flavor: BinseqFlavor,
 
+    /// BINSEQ bit size
+    #[clap(long, default_value_t = 2)]
+    bitsize: u8,
+
     /// VBQ virtual block size (in bytes)
     ///
     /// Only used by vbq
@@ -86,6 +91,13 @@ impl RecodeOutput {
         } else {
             let ext = self.flavor.extension();
             format!("output.{}", ext)
+        }
+    }
+    pub fn bitsize(&self) -> BitSize {
+        if self.bitsize == 4 {
+            BitSize::Four
+        } else {
+            BitSize::Two
         }
     }
 }
