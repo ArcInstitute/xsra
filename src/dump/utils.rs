@@ -9,13 +9,14 @@ pub fn write_segment_to_buffer_set(
     buffers: &mut [Vec<u8>],
     segment: &Segment<'_>,
     format: OutputFormat,
+    accession_prefix: Option<(&str, bool)>,
 ) -> Result<()> {
     if buffers.len() == 1 {
         // Interleaved output - single output handle
         let buffer = &mut buffers[0];
         match format {
-            OutputFormat::Fasta => write_fasta(buffer, segment)?,
-            OutputFormat::Fastq => write_fastq(buffer, segment)?,
+            OutputFormat::Fasta => write_fasta(buffer, segment, accession_prefix)?,
+            OutputFormat::Fastq => write_fastq(buffer, segment, accession_prefix)?,
         }
         Ok(())
     } else {
@@ -28,15 +29,24 @@ pub fn write_segment_to_buffer_set(
         let seg_id = segment.sid();
         let buffer = &mut buffers[seg_id];
         match format {
-            OutputFormat::Fasta => write_fasta(buffer, segment)?,
-            OutputFormat::Fastq => write_fastq(buffer, segment)?,
+            OutputFormat::Fasta => write_fasta(buffer, segment, accession_prefix)?,
+            OutputFormat::Fastq => write_fastq(buffer, segment, accession_prefix)?,
         }
         Ok(())
     }
 }
 
-pub fn write_fastq<W: Write>(wtr: &mut W, segment: &Segment<'_>) -> Result<()> {
-    writeln!(wtr, "@{}.{}", segment.rid(), segment.sid())?;
+pub fn write_fastq<W: Write>(wtr: &mut W, segment: &Segment<'_>, accession_prefix: Option<(&str, bool)>) -> Result<()> {
+    match accession_prefix {
+        Some((prefix, include_sid)) => {
+            if include_sid {
+                writeln!(wtr, "@{}.{}.{}", prefix, segment.rid(), segment.sid())?;
+            } else {
+                writeln!(wtr, "@{}.{}", prefix, segment.rid())?;
+            }
+        }
+        None => writeln!(wtr, "@{}.{}", segment.rid(), segment.sid())?,
+    }
     wtr.write_all(segment.seq())?;
     writeln!(wtr, "\n+")?;
     wtr.write_all(segment.qual())?;
@@ -44,8 +54,17 @@ pub fn write_fastq<W: Write>(wtr: &mut W, segment: &Segment<'_>) -> Result<()> {
     Ok(())
 }
 
-pub fn write_fasta<W: Write>(wtr: &mut W, segment: &Segment<'_>) -> Result<()> {
-    writeln!(wtr, ">{}.{}", segment.rid(), segment.sid())?;
+pub fn write_fasta<W: Write>(wtr: &mut W, segment: &Segment<'_>, accession_prefix: Option<(&str, bool)>) -> Result<()> {
+    match accession_prefix {
+        Some((prefix, include_sid)) => {
+            if include_sid {
+                writeln!(wtr, ">{}.{}.{}", prefix, segment.rid(), segment.sid())?;
+            } else {
+                writeln!(wtr, ">{}.{}", prefix, segment.rid())?;
+            }
+        }
+        None => writeln!(wtr, ">{}.{}", segment.rid(), segment.sid())?,
+    }
     wtr.write_all(segment.seq())?;
     writeln!(wtr)?;
     Ok(())

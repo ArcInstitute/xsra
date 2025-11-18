@@ -27,6 +27,7 @@ fn launch_threads(
     writer: Arc<Mutex<BoxedSegmentWriter>>,
     filter_opts: FilterOptions,
     format: OutputFormat,
+    accession_prefix: Option<(String, bool)>,
 ) -> Result<ProcessStatistics> {
     // Segments included in the output
     let segment_set = if filter_opts.include.is_empty() {
@@ -49,6 +50,7 @@ fn launch_threads(
         };
         let path = path.to_string();
         let shared_writer = writer.clone();
+        let accession_prefix = accession_prefix.clone();
 
         let handle = std::thread::spawn(move || -> Result<ProcessStatistics> {
             let reader = SraReader::new(&path)?;
@@ -86,7 +88,12 @@ fn launch_threads(
                     }
 
                     // Write the segment to the record set
-                    write_segment_to_buffer_set(&mut local_buffers, &segment, format)?;
+                    write_segment_to_buffer_set(
+                        &mut local_buffers, 
+                        &segment, 
+                        format, 
+                        accession_prefix.as_ref().map(|(s, b)| (s.as_str(), *b))
+                    )?;
 
                     if counts.len() == 1 {
                         counts[0] += 1;
@@ -181,6 +188,13 @@ pub fn dump(
     .map(|x| Arc::new(Mutex::new(x)))?;
 
     let included_segs = filter_opts.include.clone();
+    let accession_name = Path::new(&input.accession)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&input.accession)
+        .to_string();
+    let accession_prefix = Some((accession_name, !output_opts.split));
+    
     // Launch worker threads
     let stats = launch_threads(
         &accession,
@@ -190,6 +204,7 @@ pub fn dump(
         writer,
         filter_opts,
         output_opts.format,
+        accession_prefix,
     )?;
 
     // Remove empty files
