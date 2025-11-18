@@ -89,10 +89,10 @@ fn launch_threads(
 
                     // Write the segment to the record set
                     write_segment_to_buffer_set(
-                        &mut local_buffers, 
-                        &segment, 
-                        format, 
-                        accession_prefix.as_ref().map(|(s, b)| (s.as_str(), *b))
+                        &mut local_buffers,
+                        &segment,
+                        format,
+                        accession_prefix.as_ref().map(|(s, b)| (s.as_str(), *b)),
                     )?;
 
                     if counts.len() == 1 {
@@ -194,7 +194,7 @@ pub fn dump(
         .unwrap_or(&input.accession)
         .to_string();
     let accession_prefix = Some((accession_name, !output_opts.split));
-    
+
     // Launch worker threads
     let stats = launch_threads(
         &accession,

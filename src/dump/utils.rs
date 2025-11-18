@@ -36,7 +36,11 @@ pub fn write_segment_to_buffer_set(
     }
 }
 
-pub fn write_fastq<W: Write>(wtr: &mut W, segment: &Segment<'_>, accession_prefix: Option<(&str, bool)>) -> Result<()> {
+pub fn write_fastq<W: Write>(
+    wtr: &mut W,
+    segment: &Segment<'_>,
+    accession_prefix: Option<(&str, bool)>,
+) -> Result<()> {
     match accession_prefix {
         Some((prefix, include_sid)) => {
             if include_sid {
@@ -54,7 +58,11 @@ pub fn write_fastq<W: Write>(wtr: &mut W, segment: &Segment<'_>, accession_prefi
     Ok(())
 }
 
-pub fn write_fasta<W: Write>(wtr: &mut W, segment: &Segment<'_>, accession_prefix: Option<(&str, bool)>) -> Result<()> {
+pub fn write_fasta<W: Write>(
+    wtr: &mut W,
+    segment: &Segment<'_>,
+    accession_prefix: Option<(&str, bool)>,
+) -> Result<()> {
     match accession_prefix {
         Some((prefix, include_sid)) => {
             if include_sid {
