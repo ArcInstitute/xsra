@@ -197,9 +197,6 @@ pub fn dump(
         .to_string();
     let accession_prefix = Some(accession_name);
 
-    // include the segment ID when interleaving (otherwise exclude it)
-    let include_sid = !output_opts.split;
-
     // Launch worker threads
     let stats = launch_threads(
         &accession,
@@ -210,7 +207,7 @@ pub fn dump(
         filter_opts,
         output_opts.format,
         accession_prefix,
-        include_sid,
+        output_opts.include_sid(),
     )?;
 
     // Remove empty files

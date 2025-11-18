@@ -70,6 +70,7 @@ fn test_split_file_dump() -> Result<()> {
         named_pipes: false,
         split: true,
         keep_empty: false,
+        include_sid: false,
     };
 
     let filter_opts = FilterOptions {
@@ -145,6 +146,7 @@ fn test_empty_file_removal() -> Result<()> {
         named_pipes: false,
         split: true,
         keep_empty: false,
+        include_sid: false,
     };
 
     let filter_opts = FilterOptions {

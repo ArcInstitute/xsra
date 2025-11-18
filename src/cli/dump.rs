@@ -50,6 +50,10 @@ pub struct DumpOutput {
     #[clap(short = 'p', long, default_value = "seg_")]
     pub prefix: String,
 
+    /// Include the segment ID in split files
+    #[clap(long, requires = "split")]
+    pub include_sid: bool,
+
     /// Compress output files
     ///
     /// [uncompressed, gzip, bgzip, zstd]
@@ -61,6 +65,15 @@ pub struct DumpOutput {
     /// By default empty files will be deleted
     #[clap(short = 'E', long)]
     pub keep_empty: bool,
+}
+impl DumpOutput {
+    pub fn include_sid(&self) -> bool {
+        if self.split {
+            self.include_sid
+        } else {
+            true
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
