@@ -168,6 +168,10 @@ impl ThreadWriter {
                 cvar.notify_one();
                 break;
             } else {
+                // Release the lock before sleeping so the worker thread can
+                // acquire it and drain the buffer while we wait for backpressure
+                // to ease.
+                drop(guard);
                 thread::sleep(Duration::from_millis(DEFAULT_SLEEP_MS));
             }
         }
