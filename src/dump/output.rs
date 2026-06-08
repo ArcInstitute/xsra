@@ -2,7 +2,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use parking_lot::Condvar;
 use parking_lot::Mutex;
 
@@ -100,6 +100,10 @@ struct WriterState {
     /// Set to `true` once the owning [`ThreadWriter`] is dropped, signalling that
     /// no further data will be ingested.
     closed: bool,
+    /// Set if the worker thread terminates due to an I/O error. Producers parked
+    /// in [`ThreadWriter::ingest`] observe this and return an error instead of
+    /// blocking forever on a worker that will never notify again.
+    error: Option<String>,
 }
 
 /// A thead-local writer that owns a subprocess handling the actual writing
@@ -116,6 +120,7 @@ impl ThreadWriter {
             Mutex::new(WriterState {
                 buffer: Vec::new(),
                 closed: false,
+                error: None,
             }),
             Condvar::new(),
         ));
@@ -146,9 +151,16 @@ impl ThreadWriter {
                 cvar.notify_all();
                 drop(guard); // Release lock before I/O
 
-                // Perform actual write (potentially blocking I/O)
-                handle.write_all(&data)?;
-                handle.flush()?;
+                // Perform actual write (potentially blocking I/O). On failure,
+                // record the error and wake any parked producer so it observes
+                // the failure instead of waiting forever for a notification that
+                // will never come.
+                if let Err(e) = handle.write_all(&data).and_then(|()| handle.flush()) {
+                    let mut guard = state.lock();
+                    guard.error = Some(e.to_string());
+                    cvar.notify_all();
+                    return Err(e.into());
+                }
             }
         });
 
@@ -158,7 +170,7 @@ impl ThreadWriter {
         }
     }
 
-    fn ingest(&self, data: &[u8]) {
+    fn ingest(&self, data: &[u8]) -> Result<()> {
         let (state, cvar) = &*self.state_pair;
         let mut guard = state.lock();
 
@@ -170,11 +182,24 @@ impl ThreadWriter {
         // of deadlocking. The condition variable replaces the previous polling
         // sleep, so the producer resumes the instant the worker drains.
         while !guard.buffer.is_empty() && guard.buffer.len() + data.len() > MAXIMUM_BUFFER_SIZE {
+            // If the worker died while we were waiting for it to drain, stop
+            // waiting: no further notifications will arrive.
+            if let Some(err) = &guard.error {
+                bail!("writer thread failed: {err}");
+            }
             cvar.wait(&mut guard);
+        }
+
+        // The worker may have failed before we ever parked above (e.g. the
+        // buffer had room). Surface that rather than silently buffering data
+        // that will never be written.
+        if let Some(err) = &guard.error {
+            bail!("writer thread failed: {err}");
         }
 
         guard.buffer.extend_from_slice(data);
         cvar.notify_all();
+        Ok(())
     }
 }
 
@@ -239,7 +264,7 @@ impl BufferedWriter {
             .zip(self.segment_buffers.iter_mut())
         {
             if !buf.is_empty() {
-                writer.ingest(buf.drain(..).as_slice());
+                writer.ingest(buf.drain(..).as_slice())?;
             }
         }
         Ok(())
@@ -388,7 +413,7 @@ mod tests {
         let payload = b"ACGTACGTACGT";
         {
             let writer = ThreadWriter::new(handle);
-            writer.ingest(payload);
+            writer.ingest(payload).unwrap();
             // `writer` is dropped here; all ingested bytes must be flushed first.
         }
 
@@ -444,7 +469,7 @@ mod tests {
 
         // Make the worker pick up data and park inside the writer; the shared
         // buffer is empty again once it does.
-        tw.ingest(b"kick");
+        tw.ingest(b"kick").unwrap();
         {
             let (lock, cv) = &*gate;
             let mut g = lock.lock().unwrap();
@@ -458,8 +483,8 @@ mod tests {
             // A correct implementation blocks on the large chunk instead of
             // overshooting the cap.
             s.spawn(|| {
-                tw.ingest(&[1u8; 4096]);
-                tw.ingest(&vec![2u8; MAXIMUM_BUFFER_SIZE]);
+                tw.ingest(&[1u8; 4096]).unwrap();
+                tw.ingest(&vec![2u8; MAXIMUM_BUFFER_SIZE]).unwrap();
             });
 
             // Let the producer attempt both ingests.
@@ -504,7 +529,7 @@ mod tests {
         let tw = ThreadWriter::new(writer);
 
         // Park the worker mid-write so the buffer accumulates.
-        tw.ingest(b"kick");
+        tw.ingest(b"kick").unwrap();
         {
             let (lock, cv) = &*gate;
             let mut g = lock.lock().unwrap();
@@ -516,8 +541,8 @@ mod tests {
         thread::scope(|s| {
             // Fill to the cap, then block on one more byte.
             s.spawn(|| {
-                tw.ingest(&vec![3u8; MAXIMUM_BUFFER_SIZE]);
-                tw.ingest(b"z");
+                tw.ingest(&vec![3u8; MAXIMUM_BUFFER_SIZE]).unwrap();
+                tw.ingest(b"z").unwrap();
             });
 
             // Ensure the producer is blocked on the second ingest.
@@ -562,11 +587,46 @@ mod tests {
 
             {
                 let writer = ThreadWriter::new(handle);
-                writer.ingest(payload);
+                writer.ingest(payload).unwrap();
             }
 
             let written = data.lock().unwrap().clone();
             assert_eq!(written, payload);
         }
+    }
+
+    /// Reproduces the Gemini review concern: if the worker thread dies on an I/O
+    /// error, a later `ingest` must surface that error instead of blocking
+    /// forever waiting for a notification that will never arrive.
+    #[test]
+    fn ingest_reports_worker_io_error_instead_of_hanging() {
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "downstream gone"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tw = ThreadWriter::new(Box::new(FailingWriter));
+
+        // The first ingest may win the race and buffer before the worker fails;
+        // a bounded retry guarantees the worker has died, after which ingest must
+        // report the error rather than hang.
+        let mut reported = false;
+        for _ in 0..1000 {
+            if tw.ingest(b"data").is_err() {
+                reported = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(reported, "ingest never surfaced the worker I/O error");
+
+        // The worker already exited with an error; `Drop` would join and panic on
+        // that result (tracked separately as report finding #16), so skip it here.
+        std::mem::forget(tw);
     }
 }
