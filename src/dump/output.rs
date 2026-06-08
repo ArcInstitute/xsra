@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use anyhow::Result;
 use parking_lot::Condvar;
@@ -18,9 +17,6 @@ const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Set the maximum overflow buffer size to 128MB
 const MAXIMUM_BUFFER_SIZE: usize = 128 * 1024 * 1024;
-
-/// Sets the default sleep time (in milliseconds)
-const DEFAULT_SLEEP_MS: u64 = 100;
 
 /// A shorthand for the type of output handles we expect to write
 pub type BoxedWriter = Box<dyn Write + Send>;
@@ -145,6 +141,9 @@ impl ThreadWriter {
 
                 // We have data to process
                 let data = std::mem::take(&mut guard.buffer);
+                // The buffer is now empty; wake any producer parked in `ingest`
+                // waiting for backpressure to ease before releasing the lock.
+                cvar.notify_all();
                 drop(guard); // Release lock before I/O
 
                 // Perform actual write (potentially blocking I/O)
@@ -161,20 +160,21 @@ impl ThreadWriter {
 
     fn ingest(&self, data: &[u8]) {
         let (state, cvar) = &*self.state_pair;
-        loop {
-            let mut guard = state.lock();
-            if guard.buffer.len() <= MAXIMUM_BUFFER_SIZE {
-                guard.buffer.extend_from_slice(data);
-                cvar.notify_one();
-                break;
-            } else {
-                // Release the lock before sleeping so the worker thread can
-                // acquire it and drain the buffer while we wait for backpressure
-                // to ease.
-                drop(guard);
-                thread::sleep(Duration::from_millis(DEFAULT_SLEEP_MS));
-            }
+        let mut guard = state.lock();
+
+        // Apply backpressure based on the *projected* buffer size, not the
+        // current size: appending `data` must not push the buffer past the cap.
+        // We wait (releasing the lock) until the worker has drained enough for
+        // the new data to fit. An empty buffer always accepts the data so that a
+        // single write larger than the cap still makes forward progress instead
+        // of deadlocking. The condition variable replaces the previous polling
+        // sleep, so the producer resumes the instant the worker drains.
+        while !guard.buffer.is_empty() && guard.buffer.len() + data.len() > MAXIMUM_BUFFER_SIZE {
+            cvar.wait(&mut guard);
         }
+
+        guard.buffer.extend_from_slice(data);
+        cvar.notify_all();
     }
 }
 
@@ -325,6 +325,7 @@ mod tests {
     use super::*;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     // Simple in-memory writer that lets us inspect written data
     struct TestWriter {
@@ -393,6 +394,161 @@ mod tests {
 
         let written = data.lock().unwrap().clone();
         assert_eq!(written, payload);
+    }
+
+    // Backpressure tests (finding #3: ingest must enforce a *projected* cap and
+    // must not poll-sleep while holding the buffer mutex).
+
+    /// A writer that signals when it has entered `write` and then blocks there
+    /// until the test releases it. This lets us park the worker thread so the
+    /// shared buffer accumulates and backpressure is forced to engage.
+    struct GateState {
+        entered: bool,
+        released: bool,
+    }
+    struct GatedWriter {
+        gate: Arc<(Mutex<GateState>, std::sync::Condvar)>,
+    }
+    impl Write for GatedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let (lock, cv) = &*self.gate;
+            let mut g = lock.lock().unwrap();
+            g.entered = true;
+            cv.notify_all();
+            while !g.released {
+                g = cv.wait(g).unwrap();
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Reproduces finding #3: with the worker parked mid-write, a small chunk
+    /// makes the buffer non-empty and a subsequent large chunk must NOT be
+    /// appended, because the *projected* size would exceed the cap. The buggy
+    /// `len() <= MAX` check appends it anyway, overshooting the cap by a full
+    /// large chunk.
+    #[test]
+    fn ingest_enforces_projected_buffer_cap() {
+        let gate = Arc::new((
+            Mutex::new(GateState {
+                entered: false,
+                released: false,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        let writer: BoxedWriter = Box::new(GatedWriter { gate: gate.clone() });
+        let tw = ThreadWriter::new(writer);
+
+        // Make the worker pick up data and park inside the writer; the shared
+        // buffer is empty again once it does.
+        tw.ingest(b"kick");
+        {
+            let (lock, cv) = &*gate;
+            let mut g = lock.lock().unwrap();
+            while !g.entered {
+                g = cv.wait(g).unwrap();
+            }
+        }
+
+        thread::scope(|s| {
+            // Producer: a small chunk (buffer now non-empty), then a large chunk.
+            // A correct implementation blocks on the large chunk instead of
+            // overshooting the cap.
+            s.spawn(|| {
+                tw.ingest(&[1u8; 4096]);
+                tw.ingest(&vec![2u8; MAXIMUM_BUFFER_SIZE]);
+            });
+
+            // Let the producer attempt both ingests.
+            thread::sleep(Duration::from_millis(250));
+
+            let buffered = {
+                let (state, _) = &*tw.state_pair;
+                state.lock().buffer.len()
+            };
+
+            // Release the worker so the producer can finish and the scope joins
+            // cleanly regardless of the assertion outcome.
+            {
+                let (lock, cv) = &*gate;
+                lock.lock().unwrap().released = true;
+                cv.notify_all();
+            }
+
+            assert!(
+                buffered <= MAXIMUM_BUFFER_SIZE,
+                "ingest overshot the cap: buffered {buffered} bytes, cap {MAXIMUM_BUFFER_SIZE}"
+            );
+        });
+
+        drop(tw);
+    }
+
+    /// Reproduces the latency half of finding #3: once the buffer drains, a
+    /// blocked `ingest` must resume promptly via notification rather than after
+    /// a fixed polling interval. We assert a blocked producer wakes well within
+    /// the old 100ms poll period after space frees up.
+    #[test]
+    fn ingest_wakes_promptly_when_space_frees() {
+        let gate = Arc::new((
+            Mutex::new(GateState {
+                entered: false,
+                released: false,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        let writer: BoxedWriter = Box::new(GatedWriter { gate: gate.clone() });
+        let tw = ThreadWriter::new(writer);
+
+        // Park the worker mid-write so the buffer accumulates.
+        tw.ingest(b"kick");
+        {
+            let (lock, cv) = &*gate;
+            let mut g = lock.lock().unwrap();
+            while !g.entered {
+                g = cv.wait(g).unwrap();
+            }
+        }
+
+        thread::scope(|s| {
+            // Fill to the cap, then block on one more byte.
+            s.spawn(|| {
+                tw.ingest(&vec![3u8; MAXIMUM_BUFFER_SIZE]);
+                tw.ingest(b"z");
+            });
+
+            // Ensure the producer is blocked on the second ingest.
+            thread::sleep(Duration::from_millis(100));
+
+            // Release the worker; it drains the cap-sized chunk, which should
+            // immediately notify the blocked producer.
+            {
+                let (lock, cv) = &*gate;
+                lock.lock().unwrap().released = true;
+                cv.notify_all();
+            }
+
+            // The producer's final byte should be buffered/drained quickly. Poll
+            // until the worker has been handed the trailing byte (buffer empties
+            // again) or a generous deadline elapses.
+            let mut woke = false;
+            for _ in 0..50 {
+                thread::sleep(Duration::from_millis(2));
+                let (state, _) = &*tw.state_pair;
+                // Once the producer appended "z" and the worker drained it, the
+                // buffer is empty again.
+                if state.lock().buffer.is_empty() {
+                    woke = true;
+                    break;
+                }
+            }
+            assert!(woke, "blocked ingest did not resume promptly after drain");
+        });
+
+        drop(tw);
     }
 
     #[test]
